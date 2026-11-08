@@ -15,3 +15,7 @@ td,th{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertic
 th{color:var(--gold2);font-weight:normal}
 footer{color:var(--dim);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:12px}
 nav a{margin-right:16px}
+.dl{display:inline-block;background:linear-gradient(#8a6624,#6a4c18);border:1px solid #c79a3a;color:#fff3d0;text-decoration:none;
+  padding:12px 22px;border-radius:8px;font-size:18px;font-weight:bold;margin-right:10px}
+.dl:hover{filter:brightness(1.15)}
+.dim{color:var(--dim);font-size:14px}

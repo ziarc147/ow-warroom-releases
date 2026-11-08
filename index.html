@@ -22,8 +22,32 @@
 </div>
 
 <h2>다운로드</h2>
-<p><a href="https://github.com/ziarc147/ow-warroom-releases/releases">릴리스 페이지</a>에서 최신 버전 zip 을 받아 압축을 풀고 바로가기를 실행하세요.
-앱은 켤 때마다 새 버전이 있는지 알려 줘요.</p>
+<p><a id="dl" class="dl" href="https://github.com/ziarc147/ow-warroom-releases/releases/download/v0.2.0-beta.1/OWWarroom-0.2.0-beta.1.zip">⬇ 내려받기 <span id="dlver">v0.2.0-beta.1</span></a>
+<span id="dlsize" class="dim">약 12MB</span></p>
+<ol>
+  <li>받은 <code>OWWarroom-….zip</code> 을 원하는 곳(예: 문서, D:\Games)에 <b>압축 풀기</b></li>
+  <li>폴더 안 「오그리마와이번스 전투정보실」 바로가기 실행</li>
+  <li>와우 포에버 폴더 확인 → 내 구글 계정으로 로그인 → 끝</li>
+</ol>
+<p class="dim">브라우저가 "일반적으로 다운로드되지 않는 파일"이라고 막으면: 다운로드 목록에서 「…」 → 「유지」(Edge) 또는 「계속」(Chrome).
+처음 나온 앱이라 생기는 안내예요. 버튼이 안 되면 <a href="https://github.com/ziarc147/ow-warroom-releases/releases">릴리스 페이지</a>에서 받아도 돼요.
+앱은 켤 때마다 새 버전이 있는지 알려 주고, 앱 안에서 바로 업데이트할 수 있어요.</p>
+<script>
+// 가장 새 릴리스의 설치 파일로 버튼을 맞춤 (실패하면 위의 고정 링크 그대로)
+fetch('https://api.github.com/repos/ziarc147/ow-warroom-releases/releases?per_page=10')
+  .then(r => r.ok ? r.json() : [])
+  .then(rs => {
+    for (const r of rs) {
+      if (r.draft) continue;
+      const a = (r.assets || []).find(x => /^OWWarroom-.*\.zip$/.test(x.name));
+      if (!a) continue;
+      document.getElementById('dl').href = a.browser_download_url;
+      document.getElementById('dlver').textContent = r.tag_name + (r.prerelease ? ' (베타)' : '');
+      document.getElementById('dlsize').textContent = '약 ' + Math.round(a.size / 1048576) + 'MB';
+      break;
+    }
+  }).catch(() => {});
+</script>
 
 <h2>개인정보</h2>
 <p>개발자는 어떤 정보도 받거나 저장하지 않아요. 자세한 내용은 <a href="privacy.html">개인정보처리방침</a>을 보세요.</p>
