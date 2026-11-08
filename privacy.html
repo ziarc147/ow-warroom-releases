@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>개인정보처리방침 · 오그리마와이번스 전투정보실</title>
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body><main>
+<nav><a href="./">홈</a><a href="privacy.html">개인정보처리방침</a></nav>
+<h1>개인정보처리방침</h1>
+<p class="sub">오그리마와이번스 전투정보실 (이하 "앱") · 시행일 2026-11-08</p>
+
+<div class="card">
+  <b>요약:</b> 앱은 내 PC 와 <b>내 구글 드라이브</b> 사이에서만 파일을 주고받아요.
+  개발자나 다른 서버로 보내는 개인정보는 <b>없어요</b>.
+</div>
+
+<h2>1. 구글 계정으로 접근하는 정보</h2>
+<table>
+  <tr><th>권한</th><th>쓰는 곳</th></tr>
+  <tr><td><code>https://www.googleapis.com/auth/drive.file</code></td>
+      <td>앱이 내 드라이브에 만든 <code>OW전투정보실</code> 폴더와 그 안의 파일(와우 애드온 설정·폰트, 파일 목록 manifest.json)을 만들고, 읽고, 고치기.
+          앱이 만들지 않은 드라이브 파일은 볼 수 없어요.</td></tr>
+  <tr><td><code>openid</code>, <code>email</code></td>
+      <td>앱 화면에 "어느 구글 계정이 연결됐는지" 이메일 주소를 보여 주기 위해서만 써요.</td></tr>
+</table>
+
+<h2>2. 저장하는 정보와 위치</h2>
+<ul>
+  <li><b>구글 로그인 토큰</b>: 내 PC 의 <code>%LOCALAPPDATA%\OWWarroom\</code> 폴더에 윈도우 암호화(DPAPI)로 저장. 같은 PC 의 같은 윈도우 사용자만 풀 수 있어요.</li>
+  <li><b>앱 설정</b>(와우 폴더 위치, 계정 폴더 이름 등): 같은 폴더의 <code>settings.json</code>.</li>
+  <li><b>와우 애드온 설정·폰트</b>: 내 구글 드라이브의 <code>OW전투정보실</code> 폴더. 파일마다 원래 경로, 해시(sha1), 수정 시각, 올린 PC 이름이 함께 기록돼요.</li>
+</ul>
+<p>개발자는 위 정보 어느 것에도 접근할 수 없어요. 앱에는 분석·광고·추적 기능이 없어요.</p>
+
+<h2>3. 외부와 주고받는 통신</h2>
+<ul>
+  <li>Google (로그인, 구글 드라이브 API) — 위 1번의 목적에만.</li>
+  <li>GitHub (<code>api.github.com</code>) — 새 버전이 있는지 확인. 개인정보는 보내지 않아요.</li>
+</ul>
+
+<h2>4. Google API 서비스 사용자 데이터 정책 준수</h2>
+<p>앱이 Google API 로부터 받은 정보의 사용 및 다른 앱으로의 전송은
+<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>
+(제한적 사용 요구사항 포함)를 따릅니다. 받은 정보를 사람이 읽거나, 광고에 쓰거나, 제3자에게 넘기지 않습니다.</p>
+
+<h2>5. 연결 해제와 삭제</h2>
+<ul>
+  <li>앱의 <b>설정 → 구글 드라이브 → 연결 해제</b>: PC 에 저장된 토큰을 지우고 구글에 권한 취소를 요청해요.</li>
+  <li>구글 계정에서 직접: <a href="https://myaccount.google.com/permissions">Google 계정 → 보안 → 타사 액세스</a> 에서 앱을 삭제.</li>
+  <li>드라이브에 올린 파일은 내 드라이브의 <code>OW전투정보실</code> 폴더를 지우면 모두 삭제돼요.</li>
+  <li>PC 의 앱 데이터는 <code>%LOCALAPPDATA%\OWWarroom\</code> 폴더를 지우면 삭제돼요.</li>
+</ul>
+
+<h2>6. 바뀌는 경우</h2>
+<p>이 방침이 바뀌면 이 페이지에 시행일과 함께 올립니다.</p>
+
+<h2>7. 문의</h2>
+<p><a href="https://github.com/ziarc147/ow-warroom-releases/issues">GitHub Issues</a></p>
+
+<footer>World of Warcraft 는 Blizzard Entertainment 의 상표입니다. 이 앱은 Blizzard 와 관계없는 개인 제작물입니다.</footer>
+</main></body>
+</html>
