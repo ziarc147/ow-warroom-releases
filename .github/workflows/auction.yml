@@ -1,0 +1,67 @@
+# 포에버 경매장 시세: 1시간마다 블리자드 API 에서 받아 정리한 파일을 「auction-data」 릴리스에 올린다.
+# 앱(전투정보실)은 그 파일만 받아 보여 준다 — 앱에는 블리자드 열쇠가 없다.
+# 필요한 Secrets: BNET_CLIENT_ID, BNET_CLIENT_SECRET (저장소 Settings › Secrets and variables › Actions)
+name: auction-data
+
+on:
+  schedule:
+    - cron: "17 * * * *"        # 매시 17분 (블리자드 자료 갱신 뒤)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auction-data
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BNET_CLIENT_ID: ${{ secrets.BNET_CLIENT_ID }}
+      BNET_CLIENT_SECRET: ${{ secrets.BNET_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 열쇠 확인
+        id: keys
+        run: |
+          if [ -z "$BNET_CLIENT_ID" ] || [ -z "$BNET_CLIENT_SECRET" ]; then
+            echo "::warning::BNET_CLIENT_ID / BNET_CLIENT_SECRET 이 없어 건너뜀 (Settings › Secrets › Actions)"
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 릴리스 준비 · 아이템 이름 캐시 받기
+        if: steps.keys.outputs.ok == '1'
+        run: |
+          gh release view auction-data >/dev/null 2>&1 || gh release create auction-data --prerelease --latest=false \
+            --title "경매장 시세 자료 (자동)" --notes "전투정보실 앱이 받아 쓰는 포에버 경매장 시세. 1시간마다 자동으로 바뀝니다. 자료: Blizzard Battle.net API."
+          mkdir -p out/kr
+          gh release download auction-data -p "kr-items.json" -O out/kr/items.json 2>/dev/null || echo "캐시 없음 (처음)"
+
+      - name: 시세 정리 (한국)
+        if: steps.keys.outputs.ok == '1'
+        run: python3 scripts/auction_snapshot.py out kr
+
+      - name: 올리기
+        if: steps.keys.outputs.ok == '1'
+        run: |
+          cd out/kr
+          for f in *.json; do cp "$f" "../kr-$f"; done
+          cd ..
+          gh release upload auction-data kr-*.json --clobber
+
+      - name: 살려 두기 (공개 저장소는 60일 동안 변화가 없으면 예약 실행이 멈춤)
+        if: github.event_name == 'schedule'
+        run: |
+          if [ "$(date -u +%d%H)" = "0100" ]; then
+            date -u > .github/keepalive
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/keepalive && git commit -m "자동: 예약 실행 살려 두기" && git push || true
+          fi
