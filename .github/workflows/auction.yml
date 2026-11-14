@@ -18,7 +18,7 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       GH_TOKEN: ${{ github.token }}
       BNET_CLIENT_ID: ${{ secrets.BNET_CLIENT_ID }}
@@ -43,6 +43,7 @@ jobs:
             --title "경매장 시세 자료 (자동)" --notes "전투정보실 앱이 받아 쓰는 포에버 경매장 시세. 1시간마다 자동으로 바뀝니다. 자료: Blizzard Battle.net API."
           mkdir -p out/kr
           gh release download auction-data -p "kr-items.json" -O out/kr/items.json 2>/dev/null || echo "캐시 없음 (처음)"
+          gh release download auction-data -p "kr-suffix.json" -O out/kr/suffix.json 2>/dev/null || echo "무작위 효과 캐시 없음 (처음)"
 
       - name: 시세 정리 (한국)
         if: steps.keys.outputs.ok == '1'

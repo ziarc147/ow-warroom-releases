@@ -8,7 +8,14 @@
 출력 (<출력>/<지역>/):
   index.json            경매장 목록·갱신 시각·매물 수
   house-<id>.json       아이템별 [id, 최저 개당가(동), 총 수량, 매물 수, 중간 개당가, [[가격, 수량], … 싼 순 최대 8단]]
-  items.json            아이템 이름표 {id: [이름, 품질, 분류, 아이콘 번호]} — 한 번 찾은 것은 다음에 다시 씀(캐시)
+                        (0.7.x 앱용 — 무작위 효과를 한 줄로 합침. 그 앱들이 다 바뀔 때까지 같이 만든다)
+  house2-<id>.json      같은 모양인데 첫 칸이 "아이템id" 또는 "아이템id:효과번호" — 무작위 효과(○○의)마다 따로 (0.8 앱부터)
+  items.json            아이템 정보 {id: [이름, 품질, 분류, 아이콘 번호,   ← 0.7.x 앱은 여기까지만 읽음
+                                       분류id, 세부id, 세부 이름, 부위, 아이템 레벨, 착용 레벨, 툴팁, 상점 판매가]}
+                        툴팁 = [[능력치 앞 줄…], [능력치 줄…], [뒤 줄…]], 줄 = [글, 색] (""=흰, "g"=초록 효과, "d"=노랑, "r"=왼쪽\t오른쪽)
+                        한 번 찾은 것은 다음에 다시 씀(캐시)
+  suffix.json           무작위 효과 {"아이템id:효과번호": [효과 이름("고래의"), [[능력치·효과 줄, 색], …]]}
+                        블리자드는 효과 번호만 주므로 와우헤드 툴팁에서 찾음 (DECISIONS 2026-11-14). 캐시
 
 경매장 묶음 = 서버군 (2026-11-13 확인): 경매장 id 110~125 는 「서버군마다 얼라이언스·호드·검은바다」.
   묶음 1(110·113·116)=PvP, 2(111·114·117)=일반, 3(112·115·118)=항상 빔, 4(119~121)=롤플레잉, 5(123~125)=롤플레잉 PvP
@@ -17,7 +24,9 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
+import re
 import os
 import statistics
 import sys
@@ -38,6 +47,10 @@ GROUP_RULESET = {1: 1, 2: 2, 4: 3, 5: 15}           # 묶음 → 서버군 id
 FACTION = {"얼라이언스": "alliance", "호드": "horde", "검은바다": "neutral"}
 LADDER = 8
 QUALITY = {"POOR": 0, "COMMON": 1, "UNCOMMON": 2, "RARE": 3, "EPIC": 4, "LEGENDARY": 5, "ARTIFACT": 6, "HEIRLOOM": 7}
+ITEM_FIELDS = 12                                   # items.json 한 아이템의 칸 수 (이보다 짧으면 예전 캐시 → 다시 찾음)
+# 블리자드 한국어 이름이 한손·양손 모두 「도끼」라 나눔 (무기 세부 id)
+WEAPON_SUB = {0: "한손 도끼", 1: "양손 도끼", 4: "한손 둔기", 5: "양손 둔기", 7: "한손 도검", 8: "양손 도검"}
+WOWHEAD_TIP = "https://nether.wowhead.com/forever/ko/tooltip/item/{i}?bonus={b}"
 
 
 def http(url, data=None, headers=None, tries=3):
@@ -85,18 +98,26 @@ class Api:
         return st, (json.loads(b) if st == 200 and b else None)
 
 
-def summarize(auctions: list, commodities: list) -> list:
-    """아이템별 [id, 최저 개당가, 총 수량, 매물 수, 중간 개당가]. 장비는 buyout/수량, 재료는 unit_price."""
-    per: dict[int, list] = {}
+def variant(item: dict) -> str:
+    """경매 아이템 → "id" 또는 "id:효과번호" (무작위 효과 = bonus_lists, 2026-11-14 확인: 장비 매물의 18%)."""
+    b = item.get("bonus_lists") or []
+    return f"{item['id']}:{'-'.join(map(str, b))}" if b else str(item["id"])
+
+
+def summarize(auctions: list, commodities: list, split: bool = False) -> list:
+    """아이템별 [id, 최저 개당가, 총 수량, 매물 수, 중간 개당가]. 장비는 buyout/수량, 재료는 unit_price.
+    split=True 면 무작위 효과마다 따로 (첫 칸이 "id" / "id:효과" 문자열)."""
+    per: dict = {}
+    key = variant if split else (lambda it: it["id"])
     for a in auctions:
         q = a.get("quantity") or 1
         price = a.get("buyout") or a.get("unit_price")
         if not price:
             continue                                  # 즉시 구매가 없는 입찰 전용
-        per.setdefault(a["item"]["id"], []).append((price // q if a.get("buyout") else price, q))
+        per.setdefault(key(a["item"]), []).append((price // q if a.get("buyout") else price, q))
     for a in commodities:
         if a.get("unit_price"):
-            per.setdefault(a["item"]["id"], []).append((a["unit_price"], a.get("quantity") or 1))
+            per.setdefault(key(a["item"]), []).append((a["unit_price"], a.get("quantity") or 1))
     out = []
     for iid, rows in per.items():
         prices = sorted(p for p, _ in rows)
@@ -110,8 +131,71 @@ def summarize(auctions: list, commodities: list) -> list:
     return out
 
 
-def lookup_names(api: Api, ids: list, cache: dict, budget: int = 6000) -> int:
-    todo = [i for i in ids if str(i) not in cache or len(cache[str(i)]) < 4][:budget]   # 예전 캐시(아이콘 없음)도 다시
+def _ds(v) -> str:
+    """블리자드 표시 글: {"display_string": …} / {"display": {"display_string": …}} / 글."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        return v.get("display_string") or (v.get("display") or {}).get("display_string") or ""
+    return ""
+
+
+def tooltip(js: dict) -> list:
+    """아이템 API 응답 → 게임 툴팁 줄 [[앞 줄…], [능력치…], [뒤 줄…]] (줄 = [글, 색]).
+    무작위 효과 장비는 화면에서 가운데(능력치)를 그 효과의 능력치로 바꿔 보여 준다."""
+    p = js.get("preview_item") or {}
+    head, stats, tail = [], [], []
+    for k in ("name_description", "binding", "unique_equipped"):
+        if p.get(k):
+            head.append([_ds(p[k]) or (p[k].get("name") if isinstance(p[k], dict) else ""), ""])
+    if p.get("item_starts_quest"):
+        head.append([_ds(p["item_starts_quest"]) or "퀘스트 시작 아이템", ""])
+    if js.get("is_equippable") and (js.get("inventory_type") or {}).get("type") not in (None, "NON_EQUIP", "BAG"):
+        sub = "" if p.get("is_subclass_hidden") else (p.get("item_subclass") or {}).get("name", "")
+        head.append([f"{(js.get('inventory_type') or {}).get('name', '')}\t{sub}", "r"])
+    w = p.get("weapon")
+    if w:
+        head.append([f"{_ds(w.get('damage'))}\t{_ds(w.get('attack_speed'))}", "r"])
+        if _ds(w.get("dps")):
+            head.append([_ds(w["dps"]), ""])
+    for k in ("armor", "shield_block", "container_slots", "charges"):
+        if p.get(k) and _ds(p[k]):
+            head.append([_ds(p[k]), ""])
+    for s in p.get("stats") or []:
+        if _ds(s):
+            stats.append([_ds(s), ""])
+    for s in p.get("spells") or []:
+        if s.get("description"):
+            stats.append([s["description"], "g"])
+    if p.get("durability"):
+        tail.append([_ds(p["durability"]), ""])
+    req = p.get("requirements") or {}
+    for k in ("playable_classes", "level", "skill", "reputation"):
+        if req.get(k) and _ds(req[k]):
+            tail.append([_ds(req[k]), ""])
+    if p.get("set") and _ds(p["set"]):
+        tail.append([_ds(p["set"]), "d"])
+        for e in p["set"].get("effects") or []:
+            tail.append([_ds(e), "x"])                       # 세트 효과 (회색)
+    if p.get("description"):
+        tail.append([f"\"{p['description']}\"", "d"])
+    return [head, stats, tail]
+
+
+def item_entry(js: dict, icon: str) -> list:
+    cls, sub = js.get("item_class") or {}, js.get("item_subclass") or {}
+    sub_name = WEAPON_SUB.get(sub.get("id"), sub.get("name", "")) if cls.get("id") == 2 else sub.get("name", "")
+    slot = (js.get("inventory_type") or {})
+    sell = js.get("sell_price") if isinstance(js.get("sell_price"), int) else 0
+    return [js["name"], QUALITY.get((js.get("quality") or {}).get("type"), 1), cls.get("name", ""), icon,
+            cls.get("id", -1), sub.get("id", -1), sub_name,
+            slot.get("name", "") if slot.get("type") not in (None, "NON_EQUIP") else "",
+            js.get("level") or 0, js.get("required_level") or 0, tooltip(js), sell]
+
+
+def lookup_names(api: Api, ids: list, cache: dict, budget: int = 9000) -> int:
+    # 예전 캐시(칸이 모자람)도 다시 — 아이콘은 있으면 그대로 씀
+    todo = [i for i in ids if str(i) not in cache or len(cache[str(i)]) < ITEM_FIELDS][:budget]
 
     def icon(i):
         st, js = api.get(f"/data/wow/media/item/{i}", "static-forever-{r}")
@@ -121,17 +205,60 @@ def lookup_names(api: Api, ids: list, cache: dict, budget: int = 6000) -> int:
         return ""
 
     def one(i):
+        old = cache.get(str(i)) or []
         for ns in ITEM_NS:
             st, js = api.get(f"/data/wow/item/{i}", ns)
             if st == 200 and js and js.get("name"):
-                return i, [js["name"], QUALITY.get((js.get("quality") or {}).get("type"), 1),
-                           (js.get("item_class") or {}).get("name", ""), icon(i)]
+                return i, item_entry(js, old[3] if len(old) > 3 and old[3] else icon(i))
             time.sleep(0.02)
         return i, None
     with ThreadPoolExecutor(max_workers=16) as ex:          # 블리자드 한도 초당 100회 아래로
         for i, v in ex.map(one, todo):
-            cache[str(i)] = v or ["", 1, "", ""]
+            cache[str(i)] = v or ["", 1, "", "", -1, -1, "", "", 0, 0, [[], [], []], 0]
     return len(todo)
+
+
+def parse_wowhead(js: dict) -> list | None:
+    """와우헤드 툴팁(무작위 효과 포함) → [효과 이름, [[능력치·효과 줄, 색], …]]."""
+    t = js.get("tooltip") or ""
+    m = re.search(r'<b class="q\d">(.*?)</b>', t)
+    if not m:
+        return None
+    full, base = html.unescape(m.group(1)).strip(), (js.get("name") or "").strip()
+    suffix = full[len(base):].strip() if base and full.startswith(base) else ""
+    lines = []
+    for m in re.finditer(r'<span><!--stat\d+-->([^<]+)</span>|<span class="q2">((?:착용|사용|발동) 효과:.*?)</span>(?=<!--|<br>|</td>)', t):
+        s = m.group(1) or re.sub(r"<[^>]+>", "", m.group(2))
+        lines.append([html.unescape(s).strip(), "" if m.group(1) else "g"])
+    return [suffix, lines]
+
+
+def lookup_suffixes(keys: list, cache: dict, budget: int = 9000, fetch=None) -> int:
+    """무작위 효과 "id:효과" → 와우헤드 툴팁. 못 받은 것은 다음 실행 때 다시 (404 등 없는 것은 빈 값으로 기억)."""
+    todo = [k for k in keys if ":" in k and k not in cache][:budget]
+
+    def get(url):
+        if fetch:
+            return fetch(url)
+        st, b = http(url, headers={"Accept": "application/json"})
+        return st, (json.loads(b) if st == 200 and b else None)
+
+    def one(k):
+        i, b = k.split(":", 1)
+        try:
+            st, js = get(WOWHEAD_TIP.format(i=i, b=b.replace("-", ":")))
+        except (urllib.error.URLError, OSError, ValueError):
+            return k, None
+        if st == 404:
+            return k, ["", []]
+        return k, parse_wowhead(js) if st == 200 and js else None
+    n = 0
+    with ThreadPoolExecutor(max_workers=6) as ex:           # 와우헤드에 부담 주지 않게 천천히
+        for k, v in ex.map(one, todo):
+            if v is not None:
+                cache[k] = v
+                n += 1
+    return n
 
 
 def main():
@@ -150,6 +277,9 @@ def main():
     houses = [(h["id"], h.get("name", "")) for h in (hs or {}).get("auctions", [])]
     cache_p = d / "items.json"
     cache = json.loads(cache_p.read_text(encoding="utf-8")) if cache_p.is_file() else {}
+    suf_p = d / "suffix.json"
+    suf = json.loads(suf_p.read_text(encoding="utf-8")) if suf_p.is_file() else {}
+    all_keys = set()
     rnames = {}
     for r in (rs or {}).get("rulesets", []):
         _, rd = api.get(f"/data/wow/ruleset/{r['id']}", "dynamic-forever-{r}")
@@ -159,12 +289,19 @@ def main():
     for hid, name in houses:
         st1, a = api.get(f"/data/wow/ruleset/{rid}/auctions/{hid}", "dynamic-forever-{r}")
         st2, c = api.get(f"/data/wow/ruleset/{rid}/auctions/{hid}/commodities", "dynamic-forever-{r}")
-        rows = summarize((a or {}).get("auctions", []), (c or {}).get("auctions", []))
+        au, co = (a or {}).get("auctions", []), (c or {}).get("auctions", [])
+        rows = summarize(au, co)
         if not rows:
             continue
         all_ids.update(r[0] for r in rows)
+        cols = ["id", "min", "qty", "listings", "median", "ladder"]
         (d / f"house-{hid}.json").write_text(json.dumps(
-            {"house": hid, "name": name, "updated": stamp, "cols": ["id", "min", "qty", "listings", "median", "ladder"], "items": rows},
+            {"house": hid, "name": name, "updated": stamp, "cols": cols, "items": rows},
+            ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        rows2 = summarize(au, co, split=True)
+        all_keys.update(r[0] for r in rows2)
+        (d / f"house2-{hid}.json").write_text(json.dumps(
+            {"house": hid, "name": name, "updated": stamp, "cols": cols, "items": rows2},
             ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         grp = HOUSE_GROUP.get(hid)
         rs_id = GROUP_RULESET.get(grp)
@@ -173,6 +310,10 @@ def main():
                       "items": len(rows), "listings": sum(r[3] for r in rows)})
     found = lookup_names(api, sorted(all_ids), cache)
     cache_p.write_text(json.dumps(cache, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    t1 = time.time()
+    sfound = lookup_suffixes(sorted(all_keys), suf)
+    suf_p.write_text(json.dumps(suf, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"무작위 효과 {sum(1 for k in all_keys if ':' in k)}가지 (새로 찾음 {sfound}, {time.time() - t1:.0f}초)")
     (d / "index.json").write_text(json.dumps({"region": region, "updated": stamp, "houses": index,
                                               "source": "Blizzard Battle.net API (WoW Forever)"},
                                              ensure_ascii=False, indent=1), encoding="utf-8")
