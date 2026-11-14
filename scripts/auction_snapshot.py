@@ -14,6 +14,14 @@
                                        분류id, 세부id, 세부 이름, 부위, 아이템 레벨, 착용 레벨, 툴팁, 상점 판매가]}
                         툴팁 = [[능력치 앞 줄…], [능력치 줄…], [뒤 줄…]], 줄 = [글, 색] (""=흰, "g"=초록 효과, "d"=노랑, "r"=왼쪽\t오른쪽)
                         한 번 찾은 것은 다음에 다시 씀(캐시)
+  hist-<id>.json.gz     시세 기록 원본 (다음 실행이 이어 씀, 앱은 안 받음 — 시안 v15, DECISIONS 2026-11-14)
+                        {"v":1, "start": 첫 기록 시각, "h": {열쇠: [[시각, 최저, 중간, 수량], … 최근 7일 1시간 단위]},
+                                                    "d": {열쇠: [[날, 최저, 중간, 수량], … 최근 90일 하루 단위]}}
+                        시각 = 1970년부터 센 시간(UTC), 날 = 한국 시각 날짜 번호. 하루 = 그날 최저가의 최저, 중간가·수량은 평균
+  trend-<id>.json.gz    앱이 받는 요약 {"updated", "now": 지금 시각, "start", "k": {열쇠: "<JSON 글>"}}
+                        글 = {"h": 48시간(1시간), "s": 7일(6시간), "d": 90일(하루)} — 각각 pack() 모양
+                        [가장 오래된 칸(몇 칸 전), [최저…], [중간…], [수량…]] 칸마다 하나(빈 칸 null), 값은 앞 값과의 차이
+                        (열쇠마다 글로 두어 앱이 고른 아이템 하나만 풀어 읽음)
   suffix.json           무작위 효과 {"아이템id:효과번호": [효과 이름("고래의"), [[능력치·효과 줄, 색], …]]}
                         블리자드는 효과 번호만 주므로 와우헤드 툴팁에서 찾음 (DECISIONS 2026-11-14). 캐시
 
@@ -24,6 +32,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import html
 import json
 import re
@@ -51,6 +60,8 @@ ITEM_FIELDS = 12                                   # items.json 한 아이템의
 # 블리자드 한국어 이름이 한손·양손 모두 「도끼」라 나눔 (무기 세부 id)
 WEAPON_SUB = {0: "한손 도끼", 1: "양손 도끼", 4: "한손 둔기", 5: "양손 둔기", 7: "한손 도검", 8: "양손 도검"}
 WOWHEAD_TIP = "https://nether.wowhead.com/forever/ko/tooltip/item/{i}?bonus={b}"
+KST = 9                                            # 하루·6시간 묶음은 한국 시각 기준
+HIST_HOURS, HIST_DAYS, TREND_HOURS = 7 * 24, 90, 48
 
 
 def http(url, data=None, headers=None, tries=3):
@@ -261,6 +272,118 @@ def lookup_suffixes(keys: list, cache: dict, budget: int = 9000, fetch=None) -> 
     return n
 
 
+# ---------- 시세 기록 (시안 v15) ----------
+def day_of(hr: int) -> int:
+    return (hr + KST) // 24
+
+
+def six_of(hr: int) -> int:
+    return (hr + KST) // 6
+
+
+def _agg(pts: list) -> list:
+    """[[_, 최저, 중간, 수량]…] → [최저의 최저, 중간 평균, 수량 평균]"""
+    return [min(p[1] for p in pts), round(sum(p[2] for p in pts) / len(pts)), round(sum(p[3] for p in pts) / len(pts))]
+
+
+def update_history(hist: dict, rows: list, hr: int) -> dict:
+    """한 시간치 시세(house2 줄)를 기록에 덧붙임. 같은 시각을 또 넣으면(다시 실행) 바꿔 씀."""
+    hist.setdefault("v", 1)
+    hist.setdefault("start", hr)
+    H, D = hist.setdefault("h", {}), hist.setdefault("d", {})
+    for key, mn, qty, _n, med, *_ in rows:
+        pts = H.setdefault(str(key), [])
+        if pts and pts[-1][0] == hr:
+            pts.pop()
+        pts.append([hr, mn, med, qty])
+    cut_h, today = hr - HIST_HOURS + 1, day_of(hr)
+    first_full = day_of(cut_h) + 1                     # 1시간 기록이 하루를 다 덮는 첫날부터 다시 셈
+    for key in list(H):
+        pts = [p for p in H[key] if p[0] >= cut_h]
+        if pts:
+            H[key] = pts
+        else:
+            del H[key]
+            continue
+        days: dict = {}
+        for p in pts:
+            if day_of(p[0]) >= first_full:
+                days.setdefault(day_of(p[0]), []).append(p)
+        old = [x for x in D.get(key, []) if x[0] not in days]
+        D[key] = sorted(old + [[dd, *_agg(v)] for dd, v in days.items()])
+    cut_d = today - HIST_DAYS + 1
+    for key in list(D):
+        D[key] = [x for x in D[key] if x[0] >= cut_d]
+        if not D[key]:
+            del D[key]
+    return hist
+
+
+def pack(series: list) -> list:
+    """[[몇 칸 전, 최저, 중간, 수량]…] (오래된 것부터) → [가장 오래된 칸, [최저…], [중간…], [수량…]].
+    칸마다 하나씩(빈 칸 = null), 값은 앞 값과의 차이 — 시세가 그대로인 칸이 0 이 되어 압축이 잘 됨 (DECISIONS 2026-11-14)."""
+    first = series[0][0]
+    at = {x[0]: x for x in series}
+    cols: list = [[], [], []]
+    last = [0, 0, 0]
+    for ago in range(first, -1, -1):
+        x = at.get(ago)
+        for c in range(3):
+            if x is None:
+                cols[c].append(None)
+            else:
+                cols[c].append(x[c + 1] - last[c])
+                last[c] = x[c + 1]
+    return [first, *cols]
+
+
+def unpack(packed: list) -> list:
+    """pack 의 반대 (앱 서버가 화면에 넘길 때)."""
+    first, *cols = packed
+    out, last = [], [0, 0, 0]
+    for i in range(first + 1):
+        if cols[0][i] is None:
+            continue
+        for c in range(3):
+            last[c] += cols[c][i]
+        out.append([first - i, *last])
+    return out
+
+
+def make_trend(hist: dict, hr: int, stamp: str) -> dict:
+    """앱이 받는 요약: 48시간(1시간) · 7일(6시간) · 90일(하루). 시각은 「몇 칸 전」, pack 으로 줄임."""
+    H, D, k = hist.get("h", {}), hist.get("d", {}), {}
+    now6, nowd = six_of(hr), day_of(hr)
+    for key in set(H) | set(D):
+        pts = H.get(key, [])
+        o = {}
+        h = [[hr - p[0], *p[1:]] for p in pts if hr - p[0] < TREND_HOURS]
+        if h:
+            o["h"] = pack(h)
+        six: dict = {}
+        for p in pts:
+            six.setdefault(six_of(p[0]), []).append(p)
+        if six:
+            o["s"] = pack([[now6 - b, *_agg(v)] for b, v in sorted(six.items())])
+        days = {x[0]: x[1:] for x in D.get(key, [])}
+        today = [p for p in pts if day_of(p[0]) == nowd]
+        if today:
+            days[nowd] = _agg(today)                    # 오늘은 지금까지 기록으로
+        if days:
+            o["d"] = pack([[nowd - dd, *v] for dd, v in sorted(days.items())])
+        if o:
+            k[key] = json.dumps(o, separators=(",", ":"))
+    return {"updated": stamp, "now": hr, "start": hist.get("start", hr), "k": k}
+
+
+def read_gz(p: Path) -> dict:
+    return json.loads(gzip.decompress(p.read_bytes()).decode("utf-8")) if p.is_file() else {}
+
+
+def write_gz(p: Path, obj) -> None:
+    p.write_bytes(gzip.compress(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 9))
+
+
 def main():
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "dist" / "auction"
     region = sys.argv[2] if len(sys.argv) > 2 else "kr"
@@ -286,6 +409,7 @@ def main():
         rnames[r["id"]] = (rd or {}).get("name", "")
     index, all_ids = [], set()
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    hr = int(time.time() // 3600)
     for hid, name in houses:
         st1, a = api.get(f"/data/wow/ruleset/{rid}/auctions/{hid}", "dynamic-forever-{r}")
         st2, c = api.get(f"/data/wow/ruleset/{rid}/auctions/{hid}/commodities", "dynamic-forever-{r}")
@@ -300,6 +424,10 @@ def main():
             ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         rows2 = summarize(au, co, split=True)
         all_keys.update(r[0] for r in rows2)
+        hp = d / f"hist-{hid}.json.gz"
+        hist = update_history(read_gz(hp), rows2, hr)
+        write_gz(hp, hist)
+        write_gz(d / f"trend-{hid}.json.gz", make_trend(hist, hr, stamp))
         (d / f"house2-{hid}.json").write_text(json.dumps(
             {"house": hid, "name": name, "updated": stamp, "cols": cols, "items": rows2},
             ensure_ascii=False, separators=(",", ":")), encoding="utf-8")

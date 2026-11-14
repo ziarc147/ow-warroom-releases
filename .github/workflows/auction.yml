@@ -44,6 +44,14 @@ jobs:
           mkdir -p out/kr
           gh release download auction-data -p "kr-items.json" -O out/kr/items.json 2>/dev/null || echo "캐시 없음 (처음)"
           gh release download auction-data -p "kr-suffix.json" -O out/kr/suffix.json 2>/dev/null || echo "무작위 효과 캐시 없음 (처음)"
+          # 시세 기록(90일) 이어 쓰기 — 있는데 못 받으면 멈춤 (빈 기록으로 덮어쓰지 않게)
+          if gh release view auction-data --json assets -q '.assets[].name' | grep -q '^kr-hist-'; then
+            mkdir -p out/prev
+            gh release download auction-data -p "kr-hist-*.json.gz" -D out/prev
+            for f in out/prev/kr-hist-*.json.gz; do mv "$f" "out/kr/${f#out/prev/kr-}"; done
+          else
+            echo "시세 기록 없음 (처음)"
+          fi
 
       - name: 시세 정리 (한국)
         if: steps.keys.outputs.ok == '1'
@@ -53,9 +61,9 @@ jobs:
         if: steps.keys.outputs.ok == '1'
         run: |
           cd out/kr
-          for f in *.json; do cp "$f" "../kr-$f"; done
+          for f in *.json *.json.gz; do cp "$f" "../kr-$f"; done
           cd ..
-          gh release upload auction-data kr-*.json --clobber
+          gh release upload auction-data kr-*.json kr-*.json.gz --clobber
 
       - name: 살려 두기 (공개 저장소는 60일 동안 변화가 없으면 예약 실행이 멈춤)
         if: github.event_name == 'schedule'
