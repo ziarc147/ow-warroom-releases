@@ -1,0 +1,50 @@
+# 포에버 딜량 순위: 하루 한 번 ForeverDB 딜량 순위 페이지(https://foreverdb.net/dps-rankings)를 읽어
+# 정리한 파일을 「dps-data」 릴리스에 올린다. 앱(전투정보실)은 그 파일(dps.json)만 받는다 — ForeverDB 에 직접 접속하지 않음.
+# 날짜별 스냅샷(dps-hist.json)을 이어 써서 어제·지난주 대비 순위 변동을 계산한다.
+# 페이지 모양이 바뀌어 못 읽으면 아무것도 올리지 않고 실패로 끝남 (예전 파일 그대로).
+name: dps-data
+
+on:
+  schedule:
+    - cron: "40 1 * * *"        # 매일 01:40 UTC (한국 10:40)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dps-data
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 릴리스 준비 · 이전 기록 받기
+        run: |
+          gh release view dps-data >/dev/null 2>&1 || gh release create dps-data --prerelease --latest=false \
+            --title "딜량 순위 자료 (자동)" --notes "전투정보실 앱이 받아 쓰는 포에버 딜량 순위. 하루 한 번 자동으로 바뀝니다. Data from ForeverDB.net (https://foreverdb.net/dps-rankings)."
+          mkdir -p out
+          # 기록이 있는데 못 받으면 멈춤 (빈 기록으로 덮어쓰지 않게)
+          if gh release view dps-data --json assets -q '.assets[].name' | grep -qx 'dps-hist.json'; then
+            gh release download dps-data -p "dps-hist.json" -D out
+          else
+            echo "기록 없음 (처음)"
+          fi
+
+      - name: 딜량 순위 읽기 (하루 1회 요청)
+        run: python3 scripts/dps_rankings.py out
+
+      - name: 올리기
+        run: |
+          # 오늘 것이 이미 있어 받지 않았으면 dps.json 이 없음 → 올릴 것 없음
+          if [ -f out/dps.json ]; then
+            gh release upload dps-data out/dps.json out/dps-hist.json --clobber
+          else
+            echo "오늘 자료는 이미 올라가 있음"
+          fi
